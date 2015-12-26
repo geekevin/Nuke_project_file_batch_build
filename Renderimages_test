@@ -1,0 +1,418 @@
+#pragma execution_character_set("utf-8")
+#{"EP":13, "cameras":{"e013_c002":{"name":"S:/Compositing/EP13/e013_c002.nk", "frame": 147, "first_frame":100,  "last_frame":235, 'Read'：{"CH":{"first":100, "last":235, "file":"S:/Renderimages/EP13/e013_c002_Fin_T235/CH/CH_%04d.exr","enable":0}}, "Write":{"file":"S:/Output/EP13/output/e013_c002/e013_c002.####.tga"}}}, "fps":25, "format":"1280 720 0 0 1280 720 1 "}
+import os, _thread, time
+##################################
+#获取帧数范围============================================
+def getKeysRange (imagesList):
+    NumList = []    #创建空列表
+    for CameraNameStr in imagesList:
+        CameraNameStrSplit = CameraNameStr.split (".")    #分片CameraNameStr，把序列帧文件的后缀名分割出去
+        #print(CameraNameStrSplit[-2])
+        CameraNameSplit = CameraNameStrSplit[-2].split("_")    #根据"_"分片文件名
+        Num = int(CameraNameSplit[-1])    #提取出文件名中的帧数序号，转为整数类型
+        NumList.append(Num)    #添加进NumList列表
+    first_frame = min(NumList)    #用min找出列表中的最小值，作为起始帧
+    last_frame = max(NumList)     #用max找出列表中的最大值，最为结束帧
+    return first_frame, last_frame
+
+#检查文件夹是否存在======================================
+def checkFile (nameStr, dirStr):
+    os.chdir (dirStr)    #指定到当前路径
+    if not os.path.isdir (dirStr + '\\' + nameStr):    #如果路径不存在
+        os.mkdir (dirStr + '\\' + nameStr)    #就创建文件夹
+    else:    #如果存在就跳过
+        pass
+
+#在对应文件夹创建文件夹==================================
+def createFolder(fileList, EP, filePath):
+    #指定路径
+    checkFile (EP, filePath)
+    #创建集数文件夹
+    checkFile ('output', filePath + '\\' + EP)
+    for fileName in fileList:
+        checkFile (fileName, filePath + '\\' + EP + '\\output')
+
+#创建新导入节点函数======================================
+def createNode (nodeRead, NodeNudeNum, xpos):
+    nodeReadDict = nodeRead    #之间的关联是浅拷贝，所以之间值得修改是联动的
+    #print (nodeReadDict)
+    readStr = 'Read {\n inputs 0\n file S:/Renderimages/EP13/e013_c004_Fin_T217/CH_DiffuseRGB/CH_DiffuseRGB_%04d.exr\n format "1280 720 0 0 1280 720 1 hd720"\n first 100\n last 217\n origfirst 100\n origlast 217\n origset true\n name Read3\n xpos ' + str(xpos) + '\n ypos -500\n'
+    readStrSplit = readStr.split('\n')    #分片
+    newReadStrSplit = []
+    for strLine in readStrSplit:
+        if 'file' in strLine:    #搜索
+            fileSplie = strLine.split (' ')
+            #print (str(nodeReadDict['file']))
+            fileSplie[-1] = str(nodeReadDict['file'])    #替换
+            newStrLine = ' '.join(fileSplie)
+        elif 'origfirst' in strLine:    #搜索
+            fileSplie = strLine.split (' ')
+            fileSplie[-1] = str(nodeReadDict['origfirst'])    #替换
+            newStrLine = ' '.join(fileSplie)
+        elif 'origlast' in strLine:    #搜索
+            fileSplie = strLine.split (" ")
+            fileSplie[-1] = str(nodeReadDict['origlast'])    #替换
+            newStrLine = ' '.join(fileSplie)
+        elif 'first' in strLine:    #搜索
+            fileSplie = strLine.split (' ')
+            fileSplie[-1] = str(nodeReadDict['first'])    #替换
+            newStrLine = ' '.join(fileSplie)
+        elif 'last' in strLine:    #搜索
+            fileSplie = strLine.split (' ')
+            fileSplie[-1] = str(nodeReadDict['last'])    #替换
+            newStrLine = ' '.join(fileSplie)
+        elif 'name' in strLine:    #搜索
+            fileSplie = strLine.split (' ')
+            fileSplie[-1] = 'createNode' + str(NodeNudeNum)    #替换
+            newStrLine = ' '.join(fileSplie)
+        else:
+            newStrLine = strLine
+        newReadStrSplit.append(newStrLine)
+    newReadStr = '\n'.join (newReadStrSplit)    #合并
+    #print(newReadStr)
+    return newReadStr
+
+#关闭对应节点===========================================
+def closeNode (scriptSectionSon, closeNodeKey):
+    if closeNodeKey in scriptSectionSon:    #如果要关闭的节点在scriptSection中存在
+        #print ("!!!!!!!!!!!\n%s" %NewNukeStrSplit)
+        if ' disable false' in scriptSectionSon:
+            scriptSectionSon.replace(' disable false', ' disable true')
+            #print('%s节点关闭' %closeNodeKey)
+        elif not ' disable' in scriptSectionSon:
+            scriptSectionSon += " disable true\n"    #把要关闭节点最后添加关闭节点的关键字符串"\n disable true"
+            #print('%s节点关闭' %closeNodeKey)
+    return scriptSectionSon
+
+#处理节点段
+def makeRead (cameraDict, Read, scriptSection):
+    cameraDict['Read'][Read]['enable'] = 1    #更改这个素材的使用情况，1为已被使用，默认是0未被使用
+    if 'disable true' in scriptSection:    #如果这个节点被关闭
+        scriptSection = scriptSection.replace(' disable true', ' disable false')    #把关闭的节点打开
+    scriptSectionSplit = scriptSection.split('\n')    #以行为单位分割
+    newScriptSectionSplit = []    #创建新的当前节点列表，以一行为一个单位
+    for scriptSectionLine in scriptSectionSplit:    #循环原代码分片，变量scriptSectionLine每次代表一行
+        ziTest = 0    #一行的更改标记，默认为0未被更改
+        for ReadKeys in cameraDict['Read'][Read].keys ():    #循环素材信息，每一次循环变量ReadKeys代表当前素材里的其中一个属性的键
+            if ReadKeys in scriptSectionLine and (not 'g'+ReadKeys in scriptSectionLine):    #如果素材属性符合要求
+                if ReadKeys == 'format':    #如果这个属性的键是'format'
+                    newScriptSectionLine = ' %s "%s"' %(ReadKeys, str(cameraDict['Read'][Read][ReadKeys]))    #则替换对应内容的同时给值的信息那一段加上引号
+                else:    #否则
+                    newScriptSectionLine = ' %s %s' %(ReadKeys, str(cameraDict['Read'][Read][ReadKeys]))    #正常替换
+                ziTest = 1    #一行的更改标记更改为1已更改
+        if ziTest == 0:    #如果这一行没更改
+            newScriptSectionLine = scriptSectionLine    #新行和原行一样
+        newScriptSectionSplit.append(newScriptSectionLine)    #每次循环把每一行添加进新的节点列表
+    newScriptSection = '\n'.join(newScriptSectionSplit)    #循环镜头内容结束后冻结该新的节点列表的状态（转为字符串）
+    return newScriptSection
+
+def processEveryoneScript(cameraDict, cameraName, nukeModelStr, createEPNukeFilePath):
+    #print(cameraName)
+    chuanchaID = 'ID_WZ'
+    scriptSectionList = nukeModelStr.split('}\n')
+    newScriptList = []    #新的Nuke文件列表
+    for scriptSection in scriptSectionList:
+        #处理Root
+        if 'Root {' in scriptSection:
+            scriptSectionSplit = scriptSection.split("\n")    #以行为单位分割
+            lineNum = 0    #初始化段落的行数
+            for scriptSectionLine in scriptSectionSplit:    #循环模板字符串一行
+                for rootKey in cameraDict['Root'].keys ():
+                    if (rootKey in scriptSectionLine) and (not '_'+rootKey in scriptSectionLine) and (not rootKey+'_' in scriptSectionLine):    #rootKey包含name，fps等等
+                        if rootKey == 'format':
+                            newScriptSectionLine = ' %s "%s"' %(rootKey, str(cameraDict['Root'][rootKey])) #替换这一行的相关信息
+                        else:
+                            newScriptSectionLine = ' %s %s' %(rootKey, str(cameraDict['Root'][rootKey])) #替换这一行的相关信息
+                        scriptSectionSplit[lineNum] = newScriptSectionLine
+                lineNum += 1
+            newScriptSection = "\n".join(scriptSectionSplit)
+
+        #处理Read
+        elif 'Read {' in scriptSection:    #处在一个段落中
+            if not ' first' in scriptSection:
+                scriptSectionSplit = scriptSection.split('\n')
+                scriptSectionSplit[-1] = ' first 100\n'
+                scriptSection = '\n'.join(scriptSectionSplit)
+            if not ' last' in scriptSection:
+                scriptSectionSplit = scriptSection.split('\n')
+                scriptSectionSplit[-1] = ' last 100\n'
+                scriptSection = '\n'.join(scriptSectionSplit)
+            test = 0    #节点更改状态，默认为0，未更改
+            for Read in cameraDict['Read'].keys ():    #循环镜头内容，变量Read是镜头的素材的键
+                if Read == 'BG' and 'g_one' in scriptSection and '/BG_' in scriptSection:
+                    newScriptSection = makeRead (cameraDict, Read, scriptSection)
+                    test = 1    #节点更改状态改为1已更改
+                    break
+
+                elif 'g_one' in Read and '/BG_' in scriptSection:
+                    newScriptSection = makeRead (cameraDict, Read, scriptSection)
+                    test = 1    #节点更改状态改为1已更改
+                    break
+
+                elif (Read == 'YuZiReflection') and ('/' + Read in scriptSection):
+                    newScriptSection = makeRead (cameraDict, Read, scriptSection)
+                    test = 1    #节点更改状态改为1已更改
+                    break
+
+                elif (Read == 'smallYuZiRefraction') and ('/' + Read in scriptSection):
+                    newScriptSection = makeRead (cameraDict, Read, scriptSection)
+                    test = 1    #节点更改状态改为1已更改
+                    break
+
+                elif (Read == 'YuZiRefraction') and ('/' + Read in scriptSection) and (not '/' + 'smallYuZiRefraction' in scriptSection):
+                    newScriptSection = makeRead (cameraDict, Read, scriptSection)
+                    test = 1    #节点更改状态改为1已更改
+                    break
+                
+                elif (Read == 'CH') and (Read + '/' in scriptSection):
+                    newScriptSection = makeRead (cameraDict, Read, scriptSection)
+                    test = 1    #节点更改状态改为1已更改
+                    break
+
+                elif (Read+'_%' in scriptSection) or (Read+'_0' in scriptSection):    #一旦镜头内容里有符合要求的素材
+                    newScriptSection = makeRead (cameraDict, Read, scriptSection)
+                    test = 1    #节点更改状态改为1已更改
+                    break
+
+                else:
+                    newScriptSection = scriptSection
+            
+            if (test == 0) and ('Renderimages' in scriptSection):    #如果该节点未更改,并且这是一个序列素材节点
+                if 'disable false' in scriptSection:
+                    newScriptSection = scriptSection.replace('disable false', 'disable true')
+                elif not 'disable' in scriptSection:
+                    newScriptSectionSplit = scriptSection.split('\n')
+                    newScriptSectionSplit[-1] = ' disable true\n'
+                    newScriptSection = '\n'.join(newScriptSectionSplit)
+            
+
+        #处理Write
+        elif 'Write {' in scriptSection:
+            scriptSectionSplit = scriptSection.split("\n")    #以行为单位分割
+            lineNum = 0
+            for scriptSectionLine in scriptSectionSplit:    #循环模板字符串一行
+                for Write in cameraDict['Write'].keys ():
+                    if (Write in scriptSectionLine) and (not '_'+Write in scriptSectionLine) and (not Write+'_' in scriptSectionLine):
+                        newScriptSectionLine = ' %s %s' %(Write, str(cameraDict['Write'][Write]))    #字典中多余
+                        #print("镜头%s输出路径行：%s" %(cameraName, str(newScriptSectionLine)))
+                        scriptSectionSplit[lineNum] = newScriptSectionLine
+                lineNum += 1
+            newScriptSection = "\n".join(scriptSectionSplit)
+
+        #剩下的
+        else:
+            newScriptSection = scriptSection    #不变
+
+        newScriptList.append(newScriptSection)    #把节点段新的Nuke文件列表
+
+    
+    #新增多出的节点
+    for enableKey in cameraDict['Read'].keys():
+        NodeNudeNum = 0
+        xpos = 0
+        if cameraDict['Read'][enableKey]['enable'] == 0:
+            NodeNudeNum += 1
+            xpos += 110
+            newScriptList.insert (-1, createNode (cameraDict['Read'][enableKey], NodeNudeNum, xpos))    #新增节点
+            cameraDict['Read'][enableKey]['enable'] = 1
+
+    nodeKeysDict = {'Z_Depth':'z相关', 'Shadow':'s相关', chuanchaID:'id相关', 'Backlit':'yuzi'}
+    for closeNodes in newScriptList:    #循环节点段
+        for nodeKeys in nodeKeysDict.keys():
+            if (nodeKeys in closeNodes) and ('disable true' in closeNodes):    #参照节点
+                scriptSectionSonNum = 0
+                for scriptSectionSon in newScriptList:    #循环节点段
+                    if nodeKeysDict[nodeKeys] in scriptSectionSon:    #如果在目标节点中有关键标签
+                        newScriptSectionSon = closeNode (scriptSectionSon, nodeKeysDict[nodeKeys])
+                        newScriptList[scriptSectionSonNum] = newScriptSectionSon
+                    scriptSectionSonNum += 1
+    
+    #合并所有节点
+    newNukeModelStr = '}\n'.join (newScriptList)
+
+    NukeFileDir = createEPNukeFilePath + '\\' + cameraName + '.nk'
+    #print(NukeFileDir)
+    with open (NukeFileDir, mode='w', encoding='utf-8') as nukeWrite:
+        nukeWrite.write (newNukeModelStr)
+    #print ("%s创建完成" %str(cameraName))
+
+########################################
+def processScript (nukeModelPath, rangeDict, createEPNukeFilePath):
+    #处理范围内的脚本
+    #print ('在处理模板函数中！')
+    #print ("开始读取模板%s" %nukeModelPath)
+    with open (nukeModelPath, mode='r', encoding='utf-8') as nukeModelRead:    #打开模板文件
+        nukeModelStr = nukeModelRead.read()
+    #print(nukeModelStr)
+    #print(rangeDict['cameras'])
+    for cameraName in rangeDict['cameras'].keys():
+        #print(cameraName+'!')
+        #分别开始处理每个镜头
+        #processEveryoneScript(rangeDict['cameras'][cameraName], cameraName, nukeModelStr, createEPNukeFilePath)
+        _thread.start_new_thread (processEveryoneScript, (rangeDict['cameras'][cameraName], cameraName, nukeModelStr, createEPNukeFilePath))
+
+########################################
+def getCamerasInfo (episode, Renderimages_Path, Compositing_Path, Output_Path):    #参数：集数，目标集数素材序列总目录，目标集数的Nuke工程文件路径，目标集数输出路径
+    projectDict = {}    #穿件空字典
+    projectDict['cameras'] = {}    #创建'cameras'子字典
+    #testCamera = ''
+    keysDict = {}    #这个字典专门存放每个素材的最后一帧，用于获取每个镜头的最后帧
+    extList = ('.exr', '.jpg', '.jpeg', '.tga', '.tif', '.iff', '.png')
+    for dirName, dirs, files in os.walk(Renderimages_Path):
+        #print(dirName, dirs, files)
+        if not 'old' in dirName:    #排除old文件夹
+            for ext in extList:    #循环图片后缀列表
+                if len(files) > 0 and (ext in files[0]):    #如果文件夹里有文件和这个文件是图像文件
+                    filesName = '_'.join(files[0].split('_')[0:-1])
+                    #print(filesName)
+                    successionList = [material for material in files if ext in material]    #提取图像序列
+                    cameraFolder = dirName.split('\\')[-2]    #每个镜头文件夹的名字
+                    if '_' in cameraFolder:
+                        cameraFolderList = cameraFolder.split('_')    #镜头文件夹名字的分片
+                        #print(str(cameraFolder + '==>' + files[0]))
+                        if 'e' in cameraFolderList[0] and 'c' in cameraFolderList[1]:    #排除掉不是镜头的文件夹
+                            try:
+                                if not 'old' in cameraFolderList:    #注意排除掉这些文件夹：文件夹名带old
+                                    cameraName = '_'.join(cameraFolderList[:2])    #处理镜头命名，一旦命名不符合规范就会跳过
+                                    if not cameraName in keysDict.keys():
+                                        keysDict[cameraName] = {}    #在keysDict字典中建立以当前变量cameraName为键的空子字典
+                                    materialFolder = dirName.split('\\')[-1]    #获取该素材序列所在文件夹的名字
+                                    if materialFolder == 'BG':    #如果该素材序列所在文件夹的名字是BG
+                                        materialFolder = dirName.split('\\')[-3]    #则重新获取文件夹名字，该文件夹的父文件夹的父文件夹
+                                        #print(materialFolder)
+                                        
+                                    if not cameraName in projectDict['cameras'].keys():    #在字典里没有该镜头的情况下
+                                        projectDict['cameras'][cameraName] = {}    #在'camera'子字典中创建对应镜头的字典
+                                        projectDict['cameras'][cameraName]['Read'] = {}      #'Read'特指素材节点的类型
+                                        projectDict['cameras'][cameraName]['Read'][materialFolder] = {}     #在对应镜头字典中创建对应素材的字典
+                                        #这里需要把镜头里的信息放到镜头字典里，这些信息一般是固定的
+                                        projectDict['cameras'][cameraName]['Root'] = {}
+                                        projectDict['cameras'][cameraName]['Root']['fps'] = 25
+                                        projectDict['cameras'][cameraName]['Root']['format'] = "1280 720 0 0 1280 720 1 hd720"
+                                        projectDict['cameras'][cameraName]['Root']['name'] = Compositing_Path + '%s.nk' % cameraName
+                                    else:    #已存在该镜头
+                                        projectDict['cameras'][cameraName]['Read'][materialFolder] = {}     #在对应镜头字典中创建对应素材的字典
+
+                                    projectDict['cameras'][cameraName]['Read'][materialFolder]['enable'] = 0
+                                    projectDict['cameras'][cameraName]['Read'][materialFolder]['first'], projectDict['cameras'][cameraName]['Read'][materialFolder]['last'] = getKeysRange (successionList)    #帧数范围
+                                    projectDict['cameras'][cameraName]['Read'][materialFolder]['origfirst'], projectDict['cameras'][cameraName]['Read'][materialFolder]['origlast'] = projectDict['cameras'][cameraName]['Read'][materialFolder]['first'], projectDict['cameras'][cameraName]['Read'][materialFolder]['last']    #真实素材帧数范围
+                                    projectDict['cameras'][cameraName]['Read'][materialFolder]['format'] = projectDict['cameras'][cameraName]['Root']['format']    #素材的画幅宽高比，这里全部统一
+                                    keysDict[cameraName][materialFolder] = projectDict['cameras'][cameraName]['Read'][materialFolder]['last']    #把最后帧范围存进keysDict字典
+                                    #开始处理素材的路径
+                                    #print(successionList)
+                                    if len(successionList) > 1:    #序列帧的情况下
+                                        projectDict['cameras'][cameraName]['Read'][materialFolder]['file'] = os.path.join(dirName, filesName + '_%04d' + ext)
+                                    else:    #单帧的情况下
+                                        projectDict['cameras'][cameraName]['Read'][materialFolder]['file'] = os.path.join(dirName, successionList[0])
+                                    projectDict['cameras'][cameraName]['Read'][materialFolder]['file'] = projectDict['cameras'][cameraName]['Read'][materialFolder]['file'].replace('\\', '/')
+                                    #print(projectDict['cameras'][cameraName]['Read'][materialFolder]['file'])
+                                    #print(cameraName)
+                                    #print(testCamera)
+                                    #print('...'+str(projectDict))
+                                    projectDict['cameras'][cameraName]['Write'] = {}
+                                    projectDict['cameras'][cameraName]['Write']['file'] = Output_Path + 'output/%s/%s.####.tga' %(cameraName, cameraName)
+                                    projectDict['cameras'][cameraName]['Write']['file_type'] = 'targa'
+
+                            except:
+                                pass
+        #print(keysDict)
+    for camera in keysDict.keys():
+        materialList = []
+        for material in keysDict[camera].keys():
+            materialList.append(keysDict[camera][material])
+        #print(camera)
+        #print(materialList)
+        last_frame = max (materialList)
+        projectDict['cameras'][camera]['Root']['first_frame'] = 100
+        projectDict['cameras'][camera]['Root']['last_frame'] = last_frame
+        projectDict['cameras'][camera]['Root']['frame'] = last_frame + 1 - 100    #查看下旧版本的文件，看看是否需要+1
+        
+    return projectDict    #返回字典
+    
+##################################
+#episode = '33'    #暂时是33集
+print ('模本文件的命名规则：镜头号_时间段或场景_镜头段起始-镜头段结束，\n例：e033_mod_baitian_1-35.nk，\n如果是多个段落则用‘,’分开，\n例：e033_mod_baitian_1-35,42-69.nk')
+print('不要把天空之类的素材放到Renderimages文件夹中')
+episode = input ('请输入集数（两位数字，个位数的集数请在前面带个‘0’）：')
+while not os.path.isdir ('S:\\Renderimages\\EP%s\\' %episode):
+    episode = input ('输入错误，请再次输入集数：')
+
+#路径
+Renderimages_Path = 'S:\\Renderimages\\EP%s\\' %episode    #序列素材路径
+Compositing_Path = 'S:/Compositing/EP%s/' %episode    #工程文件路径
+modePath = 'S:\\Compositing\\EP%s\\mod\\' %episode    #模板路径
+Output_Path = 'S:/Output/EP%s/' %episode    #输出路径
+
+createNukeFilePath = 'D:\\nuketmp\\'
+createEPNukeFilePath = createNukeFilePath + 'EP'+episode    #临时的Nuke文件生成路径
+
+os.chdir(os.getcwd())
+
+#输出nuke文件路径
+if not os.path.isdir (createNukeFilePath):    #如果路径不存在
+    os.mkdir (createNukeFilePath)    #就Nuke创建文件夹
+if not os.path.isdir (createEPNukeFilePath):    #如果路径不存在
+    os.mkdir (createEPNukeFilePath)    #就Nuke创建文件夹
+
+#提示各种路径
+print ('以下是各种路径的信息，注意查看，有出路的请打开脚本修改。')
+print ('渲染序列路径 ==> %s' %Renderimages_Path)
+print ('工程文件路径 ==> %s' %Compositing_Path)
+print ('模板路径 ==> %s' %modePath)
+print ('输出路径 ==> %s' %Output_Path)
+print ('临时的Nuke文件生成路径 ==> %s' %createEPNukeFilePath)
+
+#获得、收集信息
+projectDict = getCamerasInfo (episode, Renderimages_Path, Compositing_Path, Output_Path)
+with open (createEPNukeFilePath+'\\projectDict.txt', mode='w', encoding='utf-8') as writeProjectDict:
+    writeProjectDict.write(str(projectDict))
+
+for nukeMode in os.listdir (modePath):
+    if os.path.splitext(modePath + nukeMode)[-1] == '.nk':
+        #print(nukeMode)
+        #这里吧镜头段落挑出来
+        fileRangeStr = nukeMode.split('.')[0].split('_')[-1]
+        #这里开始分割镜头段
+        try:
+            fileRangeList = fileRangeStr.split(',')
+        except:
+            fileRangeList = [fileRangeStr]
+        #逐个处理每个段落
+        for cameraSection in fileRangeList:
+            #划出当前段落的范围
+            rangeInt = range(int(cameraSection.split('-')[0]), int(cameraSection.split('-')[1])+1)
+            #创建镜头范围的字典
+            rangeDict = {}
+            rangeDict['cameras'] = {}
+            for cameraKeys in projectDict['cameras'].keys():
+                Num = ''
+                for s in cameraKeys.split('_')[1]:    #遍历字符串
+                    if s.isdigit():
+                        Num+=s
+
+                try:
+                    if int(Num) in rangeInt:
+                        #把对应镜头的信息放到范围字典里
+                        rangeDict['cameras'][cameraKeys] = projectDict['cameras'][cameraKeys]
+                except:
+                    #print(Num)
+                    #print(rangeInt)
+                    print(cameraKeys)
+                    pass
+            #processScript (os.path.join(modePath, nukeMode), rangeDict, createEPNukeFilePath)
+            _thread.start_new_thread (processScript, (os.path.join(modePath, nukeMode), rangeDict, createEPNukeFilePath))
+#print(str(projectDict))
+#print(projectDict)
+print('OK!')
+
+
+#创建输出文件夹
+filePath = 'S:\\Output'
+createOutputFolder = input('是否创建输出文件夹（创建请输入"y"，不创建直接回车）：')
+createOutputFolder = createOutputFolder.lower()
+if createOutputFolder == "y":
+    EPFile = "EP" + episode
+    FileList = projectDict["cameras"].keys()
+    createFolder(FileList, EPFile, filePath)
+    print ("输出文件夹创建完成！")
+#time.sleep(500)
